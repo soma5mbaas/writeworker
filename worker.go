@@ -13,19 +13,22 @@ import (
 
 type JsonMessage struct {
 	ApplicationId string
-	UserID        string
 	Api           map[string]string
 	Class         string
 	Method        string
+	ObjectId      string
 	Object        map[string]string
 }
 
-func SetUserTable(_classesName string, _userId string, _appKey string) string {
-	return fmt.Sprintf("ns:%s:%s:%s:keys", _classesName, _userId, _appKey)
+func SetUserTable(_classesName string, _appKey string) string {
+	return fmt.Sprintf("ns:%s:%s:keys", _classesName, _appKey)
 }
 
-func HashUserTable(_classesName string, _objectId string, _appKey string) string {
-	return fmt.Sprintf("ns:%s:%s:%s:detail", _classesName, _objectId, _appKey)
+//func HashUserTable(_classesName string, _objectId string, _appKey string) string {
+//	return fmt.Sprintf("ns:%s:%s:%s:detail", _classesName, _objectId, _appKey)
+//}
+func HashUserTable(_classesName string,  _appKey string) string {
+	return fmt.Sprintf("ns:%s:%s:detail", _classesName, _appKey)
 }
 
 func failOnError(_err error, _msg string) {
@@ -61,16 +64,17 @@ func main() {
 
 	forever := make(chan bool)
 
-	for i := 0; i < 100; i++ {
+	for i := 0; i < 10; i++ {
 		go func() {
 			//Variable Declaration
 			var m JsonMessage
 			var ClassesName string
-			var AppKey string
-			var UserId string
-			var ObjectId string
+			//var AppKey string
+			//var UserId string
+			//var ObjectId string
+			//var Object string
 			var UserValue string
-			var ObjectValue string
+			//var Objectkey string
 			var r error
 
 			//redis connetion
@@ -79,8 +83,8 @@ func main() {
 			defer c.Close()
 
 			//select database
-			RedisErr := c.Cmd("select", 9)
-			failOnError(RedisErr.Err, "Failed to select database")
+			//RedisErr := c.Cmd("select", 9)
+			//failOnError(RedisErr.Err, "Failed to select database")
 
 			for {
 				for d := range msgs {
@@ -90,18 +94,23 @@ func main() {
 
 					//Substituting the values
 					ClassesName = m.Class
-					AppKey = m.ApplicationId
-					UserId = m.UserID
-					ObjectId = m.Object["objectId"]
+					AppKey := m.ApplicationId
+					//UserId = m.UserID
+					//ObjectId = m.Object["objectId"]
+					ObjectId := m.ObjectId
+					Object := m.Object
 
 					//insert User table(PK)
-					UserValue = SetUserTable(ClassesName, UserId, AppKey)
+					UserValue = SetUserTable(ClassesName, AppKey) //
 					r := c.Cmd("sadd", UserValue, ObjectId)
 					failOnError(r.Err, "Failed to insert User table(PK)")
 
 					//insert Object table(row)
-					ObjectValue = HashUserTable(ClassesName, ObjectId, AppKey)
-					r = c.Cmd("hset", ObjectValue, ObjectId, d.Body)
+
+					Objectkey := HashUserTable(ClassesName, AppKey)
+					fmt.Println(Objectkey, ObjectId, Object)
+
+					r = c.Cmd("hmset", Objectkey, ObjectId, d.Body)
 					failOnError(r.Err, "Failed to insert Object table(row)")
 
 					d.Ack(false)
