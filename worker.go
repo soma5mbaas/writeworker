@@ -49,7 +49,7 @@ func IntToString(input_num int64) string {
 func main() {
 	runtime.GOMAXPROCS(runtime.NumCPU() * 2)
 
-	conn, err := amqp.Dial("amqp://admin:admin@stage.haru.io:5672/")
+	conn, err := amqp.Dial("amqp://user:pass@localhost:port/")
 	failOnError(err, "Failed to connect to RabbitMQ")
 	defer conn.Close()
 
@@ -70,14 +70,14 @@ func main() {
 
 	forever := make(chan bool)
 
-	pool, err := pool.NewPool("tcp", "stage.haru.io:6379", 1)
+	pool, err := pool.NewPool("tcp", "localhost:port", 1)
 	if err != nil {
 		failOnError(err, "Failed to NewPool")
 	}
 
 	for i := 0; i < 1; i++ {
 		go func() {
-			session, err := mgo.Dial("stage.haru.io:30000,stage.haru.io:40000,stage.haru.io:20000")
+			session, err := mgo.Dial("localhost:port,localhost:port,localhost:port")
 			if err != nil {
 				panic(err)
 			}
