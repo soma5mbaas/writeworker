@@ -93,7 +93,7 @@ func main() {
 						continue
 					}
 				}
-				session.
+
 				//Substituting the values
 				AppKey := m.ApplicationId
 				ObjectId := m.Id
