@@ -104,16 +104,16 @@ func main() {
 					continue
 				}
 
-				CollectionName := CollectionTable(ClassesName, AppKey)
+				//CollectionName := CollectionTable(ClassesName, AppKey)
 				//MongoDB set
 				session.SetMode(mgo.Monotonic, true)
-				c := session.DB("haru").C(CollectionName)
+				c := session.DB("haru").C("test")
 
 				//insert User table(PK)
 				UserValue := SetUserTable(ClassesName, AppKey)
 				//insert Object table(row)
 				ObjectValue := HashUserTable(ClassesName, ObjectId, AppKey)
-				fmt.Println(m.Method)
+
 				switch m.Method {
 				case "create":
 					Obj := m.Entity.(map[string]interface{})
@@ -134,7 +134,9 @@ func main() {
 
 					//MongoDB Insert
 					err = c.Insert(m.Entity)
-					failOnError(err, "Failed to mongodb insert")
+					if err != nil {
+						failOnError(err, "Failed to mongodb insert")
+					}
 				case "delete":
 					//Redis Remove
 					conns.Append("del", ObjectValue)
@@ -178,12 +180,12 @@ func main() {
 						failOnError(r.Err, "Failed to Pipelining GetReply")
 						continue
 					}
-					fmt.Println(r)
 				}
 				//Redis Connection pool return
 				pool.Put(conns)
 				//RabbitMQ Message delete
 				d.Ack(false)
+				//os.Exit(0)
 			}
 
 		}()
