@@ -70,7 +70,7 @@ func main() {
 
 	forever := make(chan bool)
 
-	pool, err := pool.NewPool("tcp", "stage.haru.io:6379", 1)
+	pool, err := pool.NewPool("tcp", "stage.haru.io:6400", 1)
 	if err != nil {
 		failOnError(err, "Failed to NewPool")
 	}
@@ -104,10 +104,10 @@ func main() {
 					continue
 				}
 
-				//CollectionName := CollectionTable(ClassesName, AppKey)
+				CollectionName := CollectionTable(ClassesName, AppKey)
 				//MongoDB set
 				session.SetMode(mgo.Monotonic, true)
-				c := session.DB("haru").C("test")
+				c := session.DB("haru").C(CollectionName)
 
 				//insert User table(PK)
 				UserValue := SetUserTable(ClassesName, AppKey)
@@ -118,19 +118,20 @@ func main() {
 				case "create":
 					Obj := m.Entity.(map[string]interface{})
 
+					fmt.Println("create")
 					for k, v := range Obj {
 						switch vv := v.(type) {
 						case string:
-							conns.Append("hset", ObjectValue, k, vv)
+							conns.Cmd("hset", ObjectValue, k, vv)
 						case float64:
-							conns.Append("hset", ObjectValue, k, FloatToString(vv))
+							conns.Cmd("hset", ObjectValue, k, FloatToString(vv))
 						case int64:
-							conns.Append("hset", ObjectValue, k, IntToString(vv))
+							conns.Cmd("hset", ObjectValue, k, IntToString(vv))
 						default:
 							fmt.Println(k, v, ObjectValue)
 						}
 					}
-					conns.Append("zadd", UserValue, m.TimeStamp, ObjectId)
+					conns.Cmd("zadd", UserValue, m.TimeStamp, ObjectId)
 
 					//MongoDB Insert
 					err = c.Insert(m.Entity)
@@ -139,8 +140,8 @@ func main() {
 					}
 				case "delete":
 					//Redis Remove
-					conns.Append("del", ObjectValue)
-					conns.Append("zrem", UserValue, ObjectId)
+					conns.Cmd("del", ObjectValue)
+					conns.Cmd("zrem", UserValue, ObjectId)
 
 					//MongoDB Remove
 					err = c.Remove(bson.M{"_id": ObjectId})
@@ -151,16 +152,16 @@ func main() {
 					for k, v := range Obj {
 						switch vv := v.(type) {
 						case string:
-							conns.Append("hset", ObjectValue, k, vv)
+							conns.Cmd("hset", ObjectValue, k, vv)
 						case float64:
-							conns.Append("hset", ObjectValue, k, FloatToString(vv))
+							conns.Cmd("hset", ObjectValue, k, FloatToString(vv))
 						case int64:
-							conns.Append("hset", ObjectValue, k, IntToString(vv))
+							conns.Cmd("hset", ObjectValue, k, IntToString(vv))
 						default:
 							fmt.Println(k, v, ObjectValue)
 						}
 					}
-					conns.Append("zadd", UserValue, m.TimeStamp, ObjectId)
+					conns.Cmd("zadd", UserValue, m.TimeStamp, ObjectId)
 
 					//MongoDB Update
 					colQuerier := bson.M{"_id": ObjectId}
@@ -174,18 +175,19 @@ func main() {
 				}
 
 				{
-					//Redis Pipelining execute
-					r := conns.GetReply()
-					if r.Err != nil {
-						failOnError(r.Err, "Failed to Pipelining GetReply")
-						continue
-					}
+					// //Redis Pipelining execute
+					// r := conns.GetReply()
+
+					// fmt.Println("GetReply", r.Err)
+					// if r.Err != nil {
+					// 	failOnError(r.Err, "Failed to Pipelining GetReply")
+					// 	//continue
+					// }
 				}
 				//Redis Connection pool return
 				pool.Put(conns)
 				//RabbitMQ Message delete
 				d.Ack(false)
-				//os.Exit(0)
 			}
 
 		}()
