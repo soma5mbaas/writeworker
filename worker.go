@@ -75,14 +75,16 @@ func main() {
 	if err != nil {
 		failOnError(err, "Failed to NewPool")
 	}
+	session, err := mgo.Dial("mongo.haru.io:40000")
+	if err != nil {
+		panic(err)
+	}
+	defer session.Close()
+
+	session.SetMode(mgo.Monotonic, true)
 
 	for i := 0; i < 1; i++ {
 		go func() {
-			session, err := mgo.Dial("stage.haru.io:30000,stage.haru.io:40000,stage.haru.io:20000")
-			if err != nil {
-				panic(err)
-			}
-			defer session.Close()
 
 			for d := range msgs {
 				//Decoding arbitrary data
@@ -107,7 +109,6 @@ func main() {
 
 				CollectionName := CollectionTable(ClassesName, AppKey)
 				//MongoDB set
-				session.SetMode(mgo.Monotonic, true)
 				c := session.DB("haru").C(CollectionName)
 
 				//insert User table(PK)
