@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/fzzy/radix/extra/pool"
+	//"github.com/fzzy/radix/redis"
 	"github.com/streadway/amqp"
 	"gopkg.in/mgo.v2"
 	"gopkg.in/mgo.v2/bson"
@@ -71,19 +72,19 @@ func main() {
 
 	forever := make(chan bool)
 
-	pool, err := pool.NewPool("tcp", "stage.haru.io:6400", 1)
+	pool, err := pool.NewPool("tcp", "stage.haru.io:6400", 100)
 	if err != nil {
 		failOnError(err, "Failed to NewPool")
 	}
-	session, err := mgo.Dial("mongo.haru.io:40000")
+
+	session, err := mgo.Dial("14.63.166.21:40000")
+	session.SetMode(mgo.Monotonic, true)
 	if err != nil {
 		panic(err)
 	}
 	defer session.Close()
 
-	session.SetMode(mgo.Monotonic, true)
-
-	for i := 0; i < 1; i++ {
+	for i := 0; i < 10; i++ {
 		go func() {
 
 			for d := range msgs {
@@ -107,9 +108,10 @@ func main() {
 					continue
 				}
 
+				//conns, err := redis.Dial("tcp", "stage.haru.io:6400")
 				CollectionName := CollectionTable(ClassesName, AppKey)
 				//MongoDB set
-				c := session.DB("haru").C(CollectionName)
+				c := session.DB("test2").C(CollectionName)
 
 				//insert User table(PK)
 				UserValue := SetUserTable(ClassesName, AppKey)
@@ -119,21 +121,20 @@ func main() {
 				switch m.Method {
 				case "create":
 					Obj := m.Entity.(map[string]interface{})
-
 					fmt.Println("create")
 					for k, v := range Obj {
 						switch vv := v.(type) {
 						case string:
-							conns.Cmd("hset", ObjectValue, k, vv)
+							conns.Append("hset", ObjectValue, k, vv)
 						case float64:
-							conns.Cmd("hset", ObjectValue, k, FloatToString(vv))
+							conns.Append("hset", ObjectValue, k, FloatToString(vv))
 						case int64:
-							conns.Cmd("hset", ObjectValue, k, IntToString(vv))
+							conns.Append("hset", ObjectValue, k, IntToString(vv))
 						default:
-							fmt.Println(k, v, ObjectValue)
+							fmt.Println(k, vv, ObjectValue)
 						}
 					}
-					conns.Cmd("zadd", UserValue, m.TimeStamp, ObjectId)
+					conns.Append("zadd", UserValue, m.TimeStamp, ObjectId)
 
 					//MongoDB Insert
 					err = c.Insert(m.Entity)
@@ -144,26 +145,26 @@ func main() {
 					//Redis Remove
 					conns.Cmd("del", ObjectValue)
 					conns.Cmd("zrem", UserValue, ObjectId)
-
+					fmt.Println("delete")
 					//MongoDB Remove
 					err = c.Remove(bson.M{"_id": ObjectId})
 					failOnError(err, "Failed to mongodb Remove")
 				case "update":
 					Obj := m.Entity.(map[string]interface{})
-
+					fmt.Println("update")
 					for k, v := range Obj {
 						switch vv := v.(type) {
 						case string:
-							conns.Cmd("hset", ObjectValue, k, vv)
+							conns.Append("hset", ObjectValue, k, vv)
 						case float64:
-							conns.Cmd("hset", ObjectValue, k, FloatToString(vv))
+							conns.Append("hset", ObjectValue, k, FloatToString(vv))
 						case int64:
-							conns.Cmd("hset", ObjectValue, k, IntToString(vv))
+							conns.Append("hset", ObjectValue, k, IntToString(vv))
 						default:
 							fmt.Println(k, v, ObjectValue)
 						}
 					}
-					conns.Cmd("zadd", UserValue, m.TimeStamp, ObjectId)
+					conns.Append("zadd", UserValue, m.TimeStamp, ObjectId)
 
 					//MongoDB Update
 					colQuerier := bson.M{"_id": ObjectId}
@@ -177,19 +178,20 @@ func main() {
 				}
 
 				{
-					// //Redis Pipelining execute
-					// r := conns.GetReply()
+					//Redis Pipelining execute
+					r := conns.GetReply()
 
-					// fmt.Println("GetReply", r.Err)
-					// if r.Err != nil {
-					// 	failOnError(r.Err, "Failed to Pipelining GetReply")
-					// 	//continue
-					// }
+					fmt.Println("GetReply", r.Err)
+					if r.Err != nil {
+						failOnError(r.Err, "Failed to Pipelining GetReply")
+						//continue
+					}
 				}
-				//Redis Connection pool return
-				pool.Put(conns)
+
 				//RabbitMQ Message delete
 				d.Ack(false)
+				//Redis Connection pool return
+				pool.Put(conns)
 			}
 
 		}()
