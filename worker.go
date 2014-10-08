@@ -72,7 +72,7 @@ func main() {
 
 	forever := make(chan bool)
 
-	pool, err := pool.NewPool("tcp", "stage.haru.io:6400", 100)
+	pool, err := pool.NewPool("tcp", "stage.haru.io:6400", 1)
 	if err != nil {
 		failOnError(err, "Failed to NewPool")
 	}
@@ -84,7 +84,7 @@ func main() {
 	}
 	defer session.Close()
 
-	for i := 0; i < 10; i++ {
+	for i := 0; i < 1; i++ {
 		go func() {
 
 			for d := range msgs {
