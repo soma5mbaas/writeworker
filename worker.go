@@ -3,10 +3,10 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+
 	"github.com/fzzy/radix/extra/pool"
 	//"github.com/fzzy/radix/redis"
 	"github.com/streadway/amqp"
-	"gopkg.in/mgo.v2"
 	"gopkg.in/mgo.v2/bson"
 	//"io/ioutil"
 	"log"
@@ -72,7 +72,7 @@ func main() {
 
 	forever := make(chan bool)
 
-	pool, err := pool.NewPool("tcp", "stage.haru.io:6400", 1)
+	pool, err := pool.NewPool("tcp", "stage.haru.io:6400", 10)
 	if err != nil {
 		failOnError(err, "Failed to NewPool")
 	}
@@ -84,7 +84,7 @@ func main() {
 	}
 	defer session.Close()
 
-	for i := 0; i < 1; i++ {
+	for i := 0; i < 10; i++ {
 		go func() {
 
 			for d := range msgs {
@@ -125,16 +125,16 @@ func main() {
 					for k, v := range Obj {
 						switch vv := v.(type) {
 						case string:
-							conns.Append("hset", ObjectValue, k, vv)
+							conns.Cmd("hset", ObjectValue, k, vv)
 						case float64:
-							conns.Append("hset", ObjectValue, k, FloatToString(vv))
+							conns.Cmd("hset", ObjectValue, k, FloatToString(vv))
 						case int64:
-							conns.Append("hset", ObjectValue, k, IntToString(vv))
+							conns.Cmd("hset", ObjectValue, k, IntToString(vv))
 						default:
 							fmt.Println(k, vv, ObjectValue)
 						}
 					}
-					conns.Append("zadd", UserValue, m.TimeStamp, ObjectId)
+					conns.Cmd("zadd", UserValue, m.TimeStamp, ObjectId)
 
 					//MongoDB Insert
 					err = c.Insert(m.Entity)
