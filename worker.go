@@ -40,7 +40,7 @@ func newPool(server, password string) *redis.Pool {
 
 var (
 	redisServer   = flag.String("stage.haru.io", ":6400", "")
-	redisPassword = flag.String("admin", "", "")
+	redisPassword = flag.String("", "", "")
 )
 
 type JsonMessage struct {
@@ -101,7 +101,7 @@ func main() {
 	forever := make(chan bool)
 
 	flag.Parse()
-	//p := newPool(*redisServer, *redisPassword)
+	p := newPool(*redisServer, *redisPassword)
 
 	session, err := mgo.Dial("14.63.166.21:40000")
 	session.SetMode(mgo.Monotonic, true)
@@ -142,9 +142,10 @@ func main() {
 				// Redis Connection pool
 				// get prunes stale connections and returns a connection from the idle list or
 				// creates a new connection.
-				// conns := p.Get()
-				// defer conns.Close()
-				conns := p
+				conns := p.Get()
+				defer conns.Close()
+				//conns := p
+
 				//MongoDB set
 				c := session.DB("test2").C(CollectionName)
 
