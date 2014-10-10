@@ -16,8 +16,8 @@ import (
 
 func newPool(server, password string) *redis.Pool {
 	return &redis.Pool{
-		MaxIdle:     120,
-		MaxActive:   120,
+		MaxIdle:     100,
+		MaxActive:   100,
 		IdleTimeout: 240 * time.Second,
 		Dial: func() (redis.Conn, error) {
 			c, err := redis.Dial("tcp", server)
@@ -100,7 +100,7 @@ func main() {
 	}
 	defer session.Close()
 
-	for i := 0; i < 120; i++ {
+	for i := 0; i < 80; i++ {
 		go func() {
 
 			for d := range msgs {
@@ -110,10 +110,12 @@ func main() {
 				conns := p.Get()
 				if conns.Err() != nil {
 					//failOnError(conns.Err(), "Failed to Get at Redis Connection pool")
-					fmt.Println("Failed to Get at Redis Connection pool")
+					fmt.Println("Failed to Get at Redis Connection pool", conns.Err())
 					time.Sleep(100 * time.Millisecond)
 					continue
 				}
+
+				fmt.Println("ActiveCount: ", p.ActiveCount())
 
 				//Decoding arbitrary data
 				var m JsonMessage
@@ -137,39 +139,45 @@ func main() {
 				//Create Object CollectionName(Collection)
 				CollectionName := CollectionTable(ClassesName, AppKey)
 
-				fmt.Println("ActiveCount: ", p.ActiveCount())
-
 				//MongoDB set
 				c := session.DB("test2").C(CollectionName)
 				conns.Send("MULTI")
 
+				c.Insert(bson.M{"_id": 1234.0})
 				switch m.Method {
 				case "create":
-					//MongoDB Insert
-					err = c.Insert(m.Entity)
-					if err != nil {
-						failOnError(err, "Failed to mongodb insert")
-						colQuerier := bson.M{"_id": ObjectId}
-						change := bson.M{"$set": m.Entity}
-						c.Upsert(colQuerier, change)
-					}
-
 					//Redis Insert
 					Obj := m.Entity.(map[string]interface{})
-					fmt.Println("create")
 					for k, v := range Obj {
 						switch vv := v.(type) {
 						case string:
 							conns.Send("hset", ObjectValue, k, vv)
 						case float64:
-							conns.Send("hset", ObjectValue, k, FloatToString(vv))
-						case int64:
-							conns.Send("hset", ObjectValue, k, IntToString(vv))
+							str := strconv.FormatFloat(vv, 'g', -1, 64)
+							n, err := strconv.ParseInt(str, 10, 64)
+
+							fmt.Println("string: ", k)
+							if k == "createAt" {
+								Obj[k] = time.Now()
+							}
+
+							if err == nil {
+								Obj[k] = int(n)
+								conns.Send("hset", ObjectValue, k, IntToString(n))
+							} else {
+								conns.Send("hset", ObjectValue, k, FloatToString(vv))
+							}
 						default:
-							fmt.Println(k, vv, ObjectValue)
+							fmt.Println("create default", k, vv, ObjectValue)
 						}
 					}
 					conns.Send("zadd", UserValue, m.TimeStamp, ObjectId)
+
+					//MongoDB Insert
+					err = c.Insert(Obj)
+					if err != nil {
+						failOnError(err, "Failed to mongodb insert")
+					}
 				case "delete":
 					//MongoDB Remove
 					err = c.Remove(bson.M{"_id": ObjectId})
@@ -225,7 +233,8 @@ func main() {
 
 				//Close releases the resources used by the Redis connection pool.
 				conns.Flush()
-				conns.Close()
+				err = conns.Close()
+				fmt.Println("Redis connection pool Close err: ", err)
 
 				//RabbitMQ Message delete
 				d.Ack(false)
