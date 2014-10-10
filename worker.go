@@ -2,7 +2,6 @@ package main
 
 import (
 	"encoding/json"
-	"flag"
 	"fmt"
 	"github.com/garyburd/redigo/redis"
 	"github.com/streadway/amqp"
@@ -10,23 +9,19 @@ import (
 	"gopkg.in/mgo.v2/bson"
 	"log"
 	"os"
-	//"runtime"
+	"runtime"
 	"strconv"
 	"time"
 )
 
 func newPool(server, password string) *redis.Pool {
 	return &redis.Pool{
-		MaxIdle:     5,
-		MaxActive:   10,
-		IdleTimeout: 60 * time.Second,
+		MaxIdle:     120,
+		MaxActive:   120,
+		IdleTimeout: 240 * time.Second,
 		Dial: func() (redis.Conn, error) {
 			c, err := redis.Dial("tcp", server)
 			if err != nil {
-				return nil, err
-			}
-			if _, err := c.Do("admin", password); err != nil {
-				c.Close()
 				return nil, err
 			}
 			return c, err
@@ -37,11 +32,6 @@ func newPool(server, password string) *redis.Pool {
 		},
 	}
 }
-
-var (
-	redisServer   = flag.String("stage.haru.io", ":6400", "")
-	redisPassword = flag.String("", "", "")
-)
 
 type JsonMessage struct {
 	ApplicationId string      `json:"applicationid"`
@@ -77,7 +67,7 @@ func failOnError(err error, msg string) {
 }
 
 func main() {
-	//runtime.GOMAXPROCS(runtime.NumCPU() * 2)
+	runtime.GOMAXPROCS(runtime.NumCPU() * 2)
 
 	conn, err := amqp.Dial("amqp://admin:admin@stage.haru.io:5672/")
 	failOnError(err, "Failed to connect to RabbitMQ")
@@ -100,23 +90,31 @@ func main() {
 
 	forever := make(chan bool)
 
-	flag.Parse()
-	p := newPool(*redisServer, *redisPassword)
+	p := newPool("stage.haru.io:6400", "")
+	defer p.Close()
 
 	session, err := mgo.Dial("14.63.166.21:40000")
-	session.SetMode(mgo.Monotonic, true)
+	session.SetMode(mgo.Strong, false)
 	if err != nil {
 		panic(err)
 	}
 	defer session.Close()
 
-	for i := 0; i < 200; i++ {
+	for i := 0; i < 120; i++ {
 		go func() {
-			p, err := redis.Dial("tcp", "stage.haru.io:6400")
-			failOnError(err, "Failed to redis.Dial")
-			defer p.Close()
 
 			for d := range msgs {
+				// Redis Connection pool
+				// get prunes stale connections and returns a connection from the idle list or
+				// creates a new connection.
+				conns := p.Get()
+				if conns.Err() != nil {
+					//failOnError(conns.Err(), "Failed to Get at Redis Connection pool")
+					fmt.Println("Failed to Get at Redis Connection pool")
+					time.Sleep(100 * time.Millisecond)
+					continue
+				}
+
 				//Decoding arbitrary data
 				var m JsonMessage
 				{
@@ -139,20 +137,24 @@ func main() {
 				//Create Object CollectionName(Collection)
 				CollectionName := CollectionTable(ClassesName, AppKey)
 
-				// Redis Connection pool
-				// get prunes stale connections and returns a connection from the idle list or
-				// creates a new connection.
-				conns := p.Get()
-				defer conns.Close()
-				//conns := p
+				fmt.Println("ActiveCount: ", p.ActiveCount())
 
 				//MongoDB set
 				c := session.DB("test2").C(CollectionName)
-
 				conns.Send("MULTI")
 
 				switch m.Method {
 				case "create":
+					//MongoDB Insert
+					err = c.Insert(m.Entity)
+					if err != nil {
+						failOnError(err, "Failed to mongodb insert")
+						colQuerier := bson.M{"_id": ObjectId}
+						change := bson.M{"$set": m.Entity}
+						c.Upsert(colQuerier, change)
+					}
+
+					//Redis Insert
 					Obj := m.Entity.(map[string]interface{})
 					fmt.Println("create")
 					for k, v := range Obj {
@@ -168,21 +170,29 @@ func main() {
 						}
 					}
 					conns.Send("zadd", UserValue, m.TimeStamp, ObjectId)
-
-					//MongoDB Insert
-					err = c.Insert(m.Entity)
-					if err != nil {
-						failOnError(err, "Failed to mongodb insert")
-					}
 				case "delete":
+					//MongoDB Remove
+					err = c.Remove(bson.M{"_id": ObjectId})
+					if err != nil {
+						failOnError(err, "Failed to mongodb Remove")
+						continue
+					}
+
 					//Redis Remove
 					conns.Send("del", ObjectValue)
 					conns.Send("zrem", UserValue, ObjectId)
 					fmt.Println("delete")
-					//MongoDB Remove
-					err = c.Remove(bson.M{"_id": ObjectId})
-					failOnError(err, "Failed to mongodb Remove")
 				case "update":
+					//MongoDB Update
+					colQuerier := bson.M{"_id": ObjectId}
+					change := bson.M{"$set": m.Entity}
+					err = c.Update(colQuerier, change)
+					if err != nil {
+						failOnError(err, "Failed to mongodb update")
+						continue
+					}
+
+					//Redis Update
 					Obj := m.Entity.(map[string]interface{})
 					fmt.Println("update")
 					for k, v := range Obj {
@@ -198,12 +208,6 @@ func main() {
 						}
 					}
 					conns.Send("zadd", UserValue, m.TimeStamp, ObjectId)
-
-					//MongoDB Update
-					colQuerier := bson.M{"_id": ObjectId}
-					change := bson.M{"$set": m.Entity}
-					err = c.Update(colQuerier, change)
-					failOnError(err, "Failed to mongodb update")
 				default:
 					var err error
 					fmt.Println(m.Method)
@@ -213,8 +217,15 @@ func main() {
 				{
 					//Redis Pipelining execute
 					_, err := conns.Do("EXEC")
-					failOnError(err, "Failed to Redis Receive")
+					if err != nil {
+						failOnError(err, "Failed to Redis Receive")
+						continue
+					}
 				}
+
+				//Close releases the resources used by the Redis connection pool.
+				conns.Flush()
+				conns.Close()
 
 				//RabbitMQ Message delete
 				d.Ack(false)
