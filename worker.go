@@ -2,17 +2,45 @@ package main
 
 import (
 	"encoding/json"
+	"flag"
 	"fmt"
-
-	"github.com/fzzy/radix/extra/pool"
-	//"github.com/fzzy/radix/redis"
+	"github.com/garyburd/redigo/redis"
 	"github.com/streadway/amqp"
+	"gopkg.in/mgo.v2"
 	"gopkg.in/mgo.v2/bson"
-	//"io/ioutil"
 	"log"
 	"os"
-	"runtime"
+	//"runtime"
 	"strconv"
+	"time"
+)
+
+func newPool(server, password string) *redis.Pool {
+	return &redis.Pool{
+		MaxIdle:     5,
+		MaxActive:   10,
+		IdleTimeout: 60 * time.Second,
+		Dial: func() (redis.Conn, error) {
+			c, err := redis.Dial("tcp", server)
+			if err != nil {
+				return nil, err
+			}
+			if _, err := c.Do("admin", password); err != nil {
+				c.Close()
+				return nil, err
+			}
+			return c, err
+		},
+		TestOnBorrow: func(c redis.Conn, t time.Time) error {
+			_, err := c.Do("PING")
+			return err
+		},
+	}
+}
+
+var (
+	redisServer   = flag.String("stage.haru.io", ":6400", "")
+	redisPassword = flag.String("admin", "", "")
 )
 
 type JsonMessage struct {
@@ -34,6 +62,12 @@ func HashUserTable(classesName, objectId, appKey string) string {
 func CollectionTable(classesName, appKey string) string {
 	return fmt.Sprintf("ns:%s:%s", classesName, appKey)
 }
+func FloatToString(input_num float64) string {
+	return strconv.FormatFloat(input_num, 'f', 6, 64)
+}
+func IntToString(input_num int64) string {
+	return strconv.FormatInt(input_num, 10)
+}
 
 func failOnError(err error, msg string) {
 	if err != nil {
@@ -42,14 +76,8 @@ func failOnError(err error, msg string) {
 	}
 }
 
-func FloatToString(input_num float64) string {
-	return strconv.FormatFloat(input_num, 'f', 6, 64)
-}
-func IntToString(input_num int64) string {
-	return strconv.FormatInt(input_num, 10)
-}
 func main() {
-	runtime.GOMAXPROCS(runtime.NumCPU() * 2)
+	//runtime.GOMAXPROCS(runtime.NumCPU() * 2)
 
 	conn, err := amqp.Dial("amqp://admin:admin@stage.haru.io:5672/")
 	failOnError(err, "Failed to connect to RabbitMQ")
@@ -72,10 +100,8 @@ func main() {
 
 	forever := make(chan bool)
 
-	pool, err := pool.NewPool("tcp", "stage.haru.io:6400", 10)
-	if err != nil {
-		failOnError(err, "Failed to NewPool")
-	}
+	flag.Parse()
+	//p := newPool(*redisServer, *redisPassword)
 
 	session, err := mgo.Dial("14.63.166.21:40000")
 	session.SetMode(mgo.Monotonic, true)
@@ -84,8 +110,11 @@ func main() {
 	}
 	defer session.Close()
 
-	for i := 0; i < 10; i++ {
+	for i := 0; i < 200; i++ {
 		go func() {
+			p, err := redis.Dial("tcp", "stage.haru.io:6400")
+			failOnError(err, "Failed to redis.Dial")
+			defer p.Close()
 
 			for d := range msgs {
 				//Decoding arbitrary data
@@ -102,21 +131,24 @@ func main() {
 				AppKey := m.ApplicationId
 				ObjectId := m.Id
 				ClassesName := m.Class
-				conns, err := pool.Get()
-				if err != nil {
-					failOnError(err, "Failed to pool.Get()")
-					continue
-				}
 
-				//conns, err := redis.Dial("tcp", "stage.haru.io:6400")
+				//Create User table(PK)
+				UserValue := SetUserTable(ClassesName, AppKey)
+				//Create Object table(row)
+				ObjectValue := HashUserTable(ClassesName, ObjectId, AppKey)
+				//Create Object CollectionName(Collection)
 				CollectionName := CollectionTable(ClassesName, AppKey)
+
+				// Redis Connection pool
+				// get prunes stale connections and returns a connection from the idle list or
+				// creates a new connection.
+				// conns := p.Get()
+				// defer conns.Close()
+				conns := p
 				//MongoDB set
 				c := session.DB("test2").C(CollectionName)
 
-				//insert User table(PK)
-				UserValue := SetUserTable(ClassesName, AppKey)
-				//insert Object table(row)
-				ObjectValue := HashUserTable(ClassesName, ObjectId, AppKey)
+				conns.Send("MULTI")
 
 				switch m.Method {
 				case "create":
@@ -125,16 +157,16 @@ func main() {
 					for k, v := range Obj {
 						switch vv := v.(type) {
 						case string:
-							conns.Cmd("hset", ObjectValue, k, vv)
+							conns.Send("hset", ObjectValue, k, vv)
 						case float64:
-							conns.Cmd("hset", ObjectValue, k, FloatToString(vv))
+							conns.Send("hset", ObjectValue, k, FloatToString(vv))
 						case int64:
-							conns.Cmd("hset", ObjectValue, k, IntToString(vv))
+							conns.Send("hset", ObjectValue, k, IntToString(vv))
 						default:
 							fmt.Println(k, vv, ObjectValue)
 						}
 					}
-					conns.Cmd("zadd", UserValue, m.TimeStamp, ObjectId)
+					conns.Send("zadd", UserValue, m.TimeStamp, ObjectId)
 
 					//MongoDB Insert
 					err = c.Insert(m.Entity)
@@ -143,8 +175,8 @@ func main() {
 					}
 				case "delete":
 					//Redis Remove
-					conns.Cmd("del", ObjectValue)
-					conns.Cmd("zrem", UserValue, ObjectId)
+					conns.Send("del", ObjectValue)
+					conns.Send("zrem", UserValue, ObjectId)
 					fmt.Println("delete")
 					//MongoDB Remove
 					err = c.Remove(bson.M{"_id": ObjectId})
@@ -155,16 +187,16 @@ func main() {
 					for k, v := range Obj {
 						switch vv := v.(type) {
 						case string:
-							conns.Append("hset", ObjectValue, k, vv)
+							conns.Send("hset", ObjectValue, k, vv)
 						case float64:
-							conns.Append("hset", ObjectValue, k, FloatToString(vv))
+							conns.Send("hset", ObjectValue, k, FloatToString(vv))
 						case int64:
-							conns.Append("hset", ObjectValue, k, IntToString(vv))
+							conns.Send("hset", ObjectValue, k, IntToString(vv))
 						default:
 							fmt.Println(k, v, ObjectValue)
 						}
 					}
-					conns.Append("zadd", UserValue, m.TimeStamp, ObjectId)
+					conns.Send("zadd", UserValue, m.TimeStamp, ObjectId)
 
 					//MongoDB Update
 					colQuerier := bson.M{"_id": ObjectId}
@@ -179,27 +211,19 @@ func main() {
 
 				{
 					//Redis Pipelining execute
-					r := conns.GetReply()
-
-					fmt.Println("GetReply", r.Err)
-					if r.Err != nil {
-						failOnError(r.Err, "Failed to Pipelining GetReply")
-						//continue
-					}
+					_, err := conns.Do("EXEC")
+					failOnError(err, "Failed to Redis Receive")
 				}
 
 				//RabbitMQ Message delete
 				d.Ack(false)
-				//Redis Connection pool return
-				pool.Put(conns)
 			}
 
 		}()
 	}
 
 	<-forever
-	pool.Empty()
-	log.Printf("Done")
+	log.Printf("Worker is Dead.")
 
 	os.Exit(0)
 }
