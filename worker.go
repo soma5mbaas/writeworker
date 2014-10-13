@@ -43,6 +43,14 @@ type JsonMessage struct {
 	Method        string      `json:"method"`
 }
 
+func setclasses(appkey string) string {
+	return fmt.Sprintf("ns:classes:%s", appkey)
+}
+func setschema(classes string, appkey string) string {
+	return fmt.Sprintf("ns:schema:%s:%s", classes, appkey)
+}
+
+/////////////////////////////////////////////////////////////
 func SetUserTable(classesName, appKey string) string {
 	return fmt.Sprintf("ns:%s:%s:keys", classesName, appKey)
 }
@@ -67,7 +75,7 @@ func failOnError(err error, msg string) {
 }
 
 func main() {
-	runtime.GOMAXPROCS(runtime.NumCPU() * 2)
+	runtime.GOMAXPROCS(runtime.NumCPU())
 
 	conn, err := amqp.Dial("amqp://admin:admin@stage.haru.io:5672/")
 	failOnError(err, "Failed to connect to RabbitMQ")
@@ -143,7 +151,6 @@ func main() {
 				c := session.DB("test2").C(CollectionName)
 				conns.Send("MULTI")
 
-				c.Insert(bson.M{"_id": 1234.0})
 				switch m.Method {
 				case "create":
 					//Redis Insert
@@ -153,6 +160,7 @@ func main() {
 						case string:
 							conns.Send("hset", ObjectValue, k, vv)
 						case float64:
+
 							str := strconv.FormatFloat(vv, 'g', -1, 64)
 							n, err := strconv.ParseInt(str, 10, 64)
 
@@ -169,6 +177,7 @@ func main() {
 							}
 						default:
 							fmt.Println("create default", k, vv, ObjectValue)
+							conns.Send("hset", ObjectValue, k, vv)
 						}
 					}
 					conns.Send("zadd", UserValue, m.TimeStamp, ObjectId)
@@ -183,13 +192,32 @@ func main() {
 					err = c.Remove(bson.M{"_id": ObjectId})
 					if err != nil {
 						failOnError(err, "Failed to mongodb Remove")
-						continue
 					}
 
 					//Redis Remove
 					conns.Send("del", ObjectValue)
 					conns.Send("zrem", UserValue, ObjectId)
 					fmt.Println("delete")
+				case "deleteClass":
+
+					items, err := redis.Strings(conns.Do("ZRANGE", UserValue, 0, -1))
+
+					for _, v := range items {
+						ZRANGEValue := HashUserTable(ClassesName, v, AppKey)
+						conns.Send("DEL", ZRANGEValue)
+						//MongoDB Remove
+						err = c.Remove(bson.M{"_id": v})
+						failOnError(err, "Failed to mongodb range Remove")
+					}
+
+					classkey := setclasses(AppKey)
+					schemakey := setschema(ClassesName, AppKey)
+
+					conns.Send("SREM", classkey, ClassesName)
+					conns.Send("DEL", schemakey)
+					conns.Send("DEL", UserValue)
+
+				case "deleteField":
 				case "update":
 					//MongoDB Update
 					colQuerier := bson.M{"_id": ObjectId}
@@ -226,10 +254,8 @@ func main() {
 					_, err := conns.Do("EXEC")
 					if err != nil {
 						failOnError(err, "Failed to Redis Receive")
-						continue
 					}
 				}
-
 				//Close releases the resources used by the Redis connection pool.
 				conns.Flush()
 				err = conns.Close()
