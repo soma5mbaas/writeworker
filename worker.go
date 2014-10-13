@@ -156,10 +156,10 @@ func main() {
 							str := strconv.FormatFloat(vv, 'g', -1, 64)
 							n, err := strconv.ParseInt(str, 10, 64)
 
-							fmt.Println("string: ", k)
-							if k == "createAt" {
-								Obj[k] = time.Now()
-							}
+							// fmt.Println("string: ", k)
+							// if k == "createAt" || k == "updateAt" {
+							// 	Obj[k] = time.Now()
+							// }
 
 							if err == nil {
 								Obj[k] = int(n)
@@ -197,7 +197,6 @@ func main() {
 					err = c.Update(colQuerier, change)
 					if err != nil {
 						failOnError(err, "Failed to mongodb update")
-						continue
 					}
 
 					//Redis Update
@@ -234,7 +233,9 @@ func main() {
 				//Close releases the resources used by the Redis connection pool.
 				conns.Flush()
 				err = conns.Close()
-				fmt.Println("Redis connection pool Close err: ", err)
+				if err != nil {
+					fmt.Println("Redis connection pool Close err: ", err)
+				}
 
 				//RabbitMQ Message delete
 				d.Ack(false)
