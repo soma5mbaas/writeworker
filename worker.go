@@ -164,11 +164,6 @@ func main() {
 							str := strconv.FormatFloat(vv, 'g', -1, 64)
 							n, err := strconv.ParseInt(str, 10, 64)
 
-							// fmt.Println("string: ", k)
-							// if k == "createAt" || k == "updateAt" {
-							// 	Obj[k] = time.Now()
-							// }
-
 							if err == nil {
 								Obj[k] = int(n)
 								conns.Send("hset", ObjectValue, k, IntToString(n))
@@ -176,7 +171,6 @@ func main() {
 								conns.Send("hset", ObjectValue, k, FloatToString(vv))
 							}
 						default:
-							fmt.Println("create default", k, vv, ObjectValue)
 							conns.Send("hset", ObjectValue, k, vv)
 						}
 					}
@@ -184,15 +178,11 @@ func main() {
 
 					//MongoDB Insert
 					err = c.Insert(Obj)
-					if err != nil {
-						failOnError(err, "Failed to mongodb insert")
-					}
+					failOnError(err, "Failed to mongodb insert")
 				case "delete":
 					//MongoDB Remove
 					err = c.Remove(bson.M{"_id": ObjectId})
-					if err != nil {
-						failOnError(err, "Failed to mongodb Remove")
-					}
+					failOnError(err, "Failed to mongodb Remove")
 
 					//Redis Remove
 					conns.Send("del", ObjectValue)
@@ -218,15 +208,11 @@ func main() {
 					conns.Send("DEL", UserValue)
 
 				case "deleteField":
-				case "update":
-					//MongoDB Update
-					colQuerier := bson.M{"_id": ObjectId}
-					change := bson.M{"$set": m.Entity}
-					err = c.Update(colQuerier, change)
-					if err != nil {
-						failOnError(err, "Failed to mongodb update")
-					}
+					// schemakey := setschema(ClassesName, AppKey)
+					// conns.Send("Hdel", schemakey, ??fieldName?? )
 
+					// conns.Send("Hdel", ObjectValue, ??fieldName?? )
+				case "update":
 					//Redis Update
 					Obj := m.Entity.(map[string]interface{})
 					fmt.Println("update")
@@ -235,14 +221,24 @@ func main() {
 						case string:
 							conns.Send("hset", ObjectValue, k, vv)
 						case float64:
-							conns.Send("hset", ObjectValue, k, FloatToString(vv))
+							if k == "createAt" {
+								delete(Obj, k)
+							} else {
+								conns.Send("hset", ObjectValue, k, FloatToString(vv))
+							}
 						case int64:
 							conns.Send("hset", ObjectValue, k, IntToString(vv))
 						default:
-							fmt.Println(k, v, ObjectValue)
+							conns.Send("hset", ObjectValue, k, vv)
 						}
 					}
 					conns.Send("zadd", UserValue, m.TimeStamp, ObjectId)
+
+					//MongoDB Update
+					colQuerier := bson.M{"_id": ObjectId}
+					change := bson.M{"$set": Obj}
+					err = c.Update(colQuerier, change)
+					failOnError(err, "Failed to mongodb update")
 				default:
 					var err error
 					fmt.Println(m.Method)
@@ -252,9 +248,7 @@ func main() {
 				{
 					//Redis Pipelining execute
 					_, err := conns.Do("EXEC")
-					if err != nil {
-						failOnError(err, "Failed to Redis Receive")
-					}
+					failOnError(err, "Failed to Redis Receive")
 				}
 				//Close releases the resources used by the Redis connection pool.
 				conns.Flush()
