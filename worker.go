@@ -7,6 +7,7 @@ import (
 	"github.com/streadway/amqp"
 	"gopkg.in/mgo.v2"
 	"gopkg.in/mgo.v2/bson"
+	"io"
 	"log"
 	"os"
 	"runtime"
@@ -68,15 +69,27 @@ func IntToString(input_num int64) string {
 	return strconv.FormatInt(input_num, 10)
 }
 
+///////////////////////////////////////////////////////////////
+var mylogger *log.Logger
+
 func failOnError(err error, msg string) {
 	if err != nil {
-		log.Println("%s: %s", msg, err)
-		//panic(fmt.Sprintf("%s: %s", msg, err))
+		mylogger.Println("%s: %s", msg, err)
 	}
 }
 
 func main() {
 	runtime.GOMAXPROCS(runtime.NumCPU())
+
+	logf, err := os.OpenFile("logFileName", os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0640)
+	if err != nil {
+		log.Fatalln(err)
+	}
+	defer logf.Close()
+
+	log.SetOutput(logf)
+	mylogger = log.New(io.MultiWriter(logf, os.Stdout), "worker: ", log.Ldate|log.Ltime|log.Llongfile)
+	mylogger.Println("goes to logf")
 
 	conn, err := amqp.Dial("amqp://admin:admin@stage.haru.io:5672/")
 	failOnError(err, "Failed to connect to RabbitMQ")
@@ -216,7 +229,7 @@ func main() {
 						conns.Send("Hdel", ObjectValue, v)
 						//MongoDB Update
 						colQuerier := bson.M{"_id": ObjectId}
-						change := bson.M{"$unset": map[string]int{v.(string): ""}}
+						change := bson.M{"$unset": map[string]string{v.(string): ""}}
 						err = c.Update(colQuerier, change)
 						failOnError(err, "Failed to mongodb update")
 					}
