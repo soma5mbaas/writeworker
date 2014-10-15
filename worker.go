@@ -34,13 +34,14 @@ func newPool(server, password string) *redis.Pool {
 }
 
 type JsonMessage struct {
-	ApplicationId string      `json:"applicationid"`
-	Api           interface{} `json:"api"`
-	Class         string      `json:"class"`
-	TimeStamp     int         `json:"timeStamp"`
-	Entity        interface{} `json:"entity,omitempty"`
-	Id            string      `json:"_id"`
-	Method        string      `json:"method"`
+	ApplicationId string        `json:"applicationid"`
+	Api           interface{}   `json:"api"`
+	Class         string        `json:"class"`
+	TimeStamp     int           `json:"timeStamp"`
+	Entity        interface{}   `json:"entity,omitempty"`
+	Id            string        `json:"_id"`
+	Method        string        `json:"method"`
+	Fields        []interface{} `json:"fields,omitempty"`
 }
 
 func setclasses(appkey string) string {
@@ -207,11 +208,19 @@ func main() {
 					conns.Send("DEL", schemakey)
 					conns.Send("DEL", UserValue)
 
-				case "deleteField":
-					// schemakey := setschema(ClassesName, AppKey)
-					// conns.Send("Hdel", schemakey, ??fieldName?? )
+				case "deleteFields":
 
-					// conns.Send("Hdel", ObjectValue, ??fieldName?? )
+					schemakey := setschema(ClassesName, AppKey)
+					for _, v := range m.Fields {
+						conns.Send("Hdel", schemakey, v)
+						conns.Send("Hdel", ObjectValue, v)
+						//MongoDB Update
+						colQuerier := bson.M{"_id": ObjectId}
+						change := bson.M{"$unset": map[string]int{v.(string): ""}}
+						err = c.Update(colQuerier, change)
+						failOnError(err, "Failed to mongodb update")
+					}
+
 				case "update":
 					//Redis Update
 					Obj := m.Entity.(map[string]interface{})
@@ -243,6 +252,7 @@ func main() {
 					var err error
 					fmt.Println(m.Method)
 					failOnError(err, "Failed to m.Method is null")
+					continue
 				}
 
 				{
