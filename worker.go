@@ -1,14 +1,14 @@
 package main
 
 import (
+	"./JsonMessage"
+	"./logger"
 	"encoding/json"
 	"fmt"
 	"github.com/garyburd/redigo/redis"
 	"github.com/streadway/amqp"
 	"gopkg.in/mgo.v2"
 	"gopkg.in/mgo.v2/bson"
-	"io"
-	"log"
 	"os"
 	"runtime"
 	"strconv"
@@ -34,69 +34,20 @@ func newPool(server, password string) *redis.Pool {
 	}
 }
 
-type JsonMessage struct {
-	ApplicationId string        `json:"applicationid"`
-	Api           interface{}   `json:"api"`
-	Class         string        `json:"class"`
-	TimeStamp     int           `json:"timeStamp"`
-	Entity        interface{}   `json:"entity,omitempty"`
-	Id            string        `json:"_id"`
-	Method        string        `json:"method"`
-	Fields        []interface{} `json:"fields,omitempty"`
-}
-
-func setclasses(appkey string) string {
-	return fmt.Sprintf("ns:classes:%s", appkey)
-}
-func setschema(classes string, appkey string) string {
-	return fmt.Sprintf("ns:schema:%s:%s", classes, appkey)
-}
-
-/////////////////////////////////////////////////////////////
-func SetUserTable(classesName, appKey string) string {
-	return fmt.Sprintf("ns:%s:%s:keys", classesName, appKey)
-}
-func HashUserTable(classesName, objectId, appKey string) string {
-	return fmt.Sprintf("ns:%s:%s:%s:detail", classesName, objectId, appKey)
-}
-func CollectionTable(classesName, appKey string) string {
-	return fmt.Sprintf("ns:%s:%s", classesName, appKey)
-}
-func FloatToString(input_num float64) string {
-	return strconv.FormatFloat(input_num, 'f', 6, 64)
-}
-func IntToString(input_num int64) string {
-	return strconv.FormatInt(input_num, 10)
-}
-
-///////////////////////////////////////////////////////////////
-var mylogger *log.Logger
-
-func failOnError(err error, msg string) {
-	if err != nil {
-		mylogger.Println("%s: %s", msg, err)
-	}
-}
-
 func main() {
 	runtime.GOMAXPROCS(runtime.NumCPU())
 
-	logf, err := os.OpenFile("logFileName", os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0640)
-	if err != nil {
-		log.Fatalln(err)
-	}
-	defer logf.Close()
+	//create logger
+	logger.CreateLogger("logfile" + string(os.Getpid()))
+	defer logger.DropLogger()
 
-	log.SetOutput(logf)
-	mylogger = log.New(io.MultiWriter(logf, os.Stdout), "worker: ", log.Ldate|log.Ltime|log.Llongfile)
-	mylogger.Println("goes to logf")
-
+	//connect to RabbitMQ
 	conn, err := amqp.Dial("amqp://admin:admin@stage.haru.io:5672/")
-	failOnError(err, "Failed to connect to RabbitMQ")
+	logger.FailOnError(err, "Failed to connect to RabbitMQ")
 	defer conn.Close()
 
 	ch, err := conn.Channel()
-	failOnError(err, "Failed to open a channel")
+	logger.FailOnError(err, "Failed to open a channel")
 	defer ch.Close()
 
 	msgs, err := ch.Consume(
@@ -108,7 +59,7 @@ func main() {
 		false,   // noWait		설정하면, 서버는 Method에 응답하지 않습니다. 클라이언트는 응답 Method를 기다릴 것이다. 서버가 Method를 완료 할 수 없을 경우는 채널 또는 연결 예외를 발생시킬 것입니다.
 		nil,     // arguments	일부 브로커를 사용하여 메시지의 TTL과 같은 추가 기능을 구현하기 위해 사용된다.
 	)
-	failOnError(err, "Failed to register a consumer")
+	logger.FailOnError(err, "Failed to register a consumer")
 
 	forever := make(chan bool)
 
@@ -131,20 +82,17 @@ func main() {
 				// creates a new connection.
 				conns := p.Get()
 				if conns.Err() != nil {
-					//failOnError(conns.Err(), "Failed to Get at Redis Connection pool")
-					fmt.Println("Failed to Get at Redis Connection pool", conns.Err())
+					logger.FailOnError(conns.Err(), "Failed to Get at Redis Connection pool")
 					time.Sleep(100 * time.Millisecond)
 					continue
 				}
 
-				fmt.Println("ActiveCount: ", p.ActiveCount())
-
 				//Decoding arbitrary data
-				var m JsonMessage
+				var m JsonMessage.JsonMessage
 				{
 					r := json.Unmarshal([]byte(d.Body), &m)
 					if err != nil {
-						failOnError(r, "Failed to json.Unmarshal")
+						logger.FailOnError(r, "Failed to json.Unmarshal")
 						continue
 					}
 				}
@@ -155,11 +103,11 @@ func main() {
 				ClassesName := m.Class
 
 				//Create User table(PK)
-				UserValue := SetUserTable(ClassesName, AppKey)
+				UserValue := JsonMessage.SetUserTable(ClassesName, AppKey)
 				//Create Object table(row)
-				ObjectValue := HashUserTable(ClassesName, ObjectId, AppKey)
+				ObjectValue := JsonMessage.HashUserTable(ClassesName, ObjectId, AppKey)
 				//Create Object CollectionName(Collection)
-				CollectionName := CollectionTable(ClassesName, AppKey)
+				CollectionName := JsonMessage.CollectionTable(ClassesName, AppKey)
 
 				//MongoDB set
 				c := session.DB("test2").C(CollectionName)
@@ -180,9 +128,9 @@ func main() {
 
 							if err == nil {
 								Obj[k] = int(n)
-								conns.Send("hset", ObjectValue, k, IntToString(n))
+								conns.Send("hset", ObjectValue, k, JsonMessage.IntToString(n))
 							} else {
-								conns.Send("hset", ObjectValue, k, FloatToString(vv))
+								conns.Send("hset", ObjectValue, k, JsonMessage.FloatToString(vv))
 							}
 						default:
 							conns.Send("hset", ObjectValue, k, vv)
@@ -192,38 +140,54 @@ func main() {
 
 					//MongoDB Insert
 					err = c.Insert(Obj)
-					failOnError(err, "Failed to mongodb insert")
+					logger.FailOnError(err, "Failed to mongodb insert")
 				case "delete":
 					//MongoDB Remove
 					err = c.Remove(bson.M{"_id": ObjectId})
-					failOnError(err, "Failed to mongodb Remove")
+					logger.FailOnError(err, "Failed to mongodb Remove")
 
 					//Redis Remove
 					conns.Send("del", ObjectValue)
 					conns.Send("zrem", UserValue, ObjectId)
 					fmt.Println("delete")
 				case "deleteClass":
+					//multi 후에 zcard를 하면 무조건 0 리턴하기때문에 EXEC를 해준다.
+					conns.Do("EXEC")
 
-					items, err := redis.Strings(conns.Do("ZRANGE", UserValue, 0, -1))
+					num, _ := redis.Int(conns.Do("zcard", UserValue))
 
-					for _, v := range items {
-						ZRANGEValue := HashUserTable(ClassesName, v, AppKey)
-						conns.Send("DEL", ZRANGEValue)
-						//MongoDB Remove
-						err = c.Remove(bson.M{"_id": v})
-						failOnError(err, "Failed to mongodb range Remove")
+					for i = 500; i < (num + 500); i += 500 {
+
+						items, err := redis.Strings(conns.Do("ZRANGE", UserValue, 0, i))
+
+						for _, v := range items {
+							conns.Send("MULTI")
+
+							ZRANGEValue := JsonMessage.HashUserTable(ClassesName, v, AppKey)
+							conns.Send("DEL", ZRANGEValue)
+
+							//MongoDB Remove
+							err = c.Remove(bson.M{"_id": v})
+							logger.FailOnError(err, "Failed to mongodb range Remove")
+						}
+
+						{
+							//Redis Pipelining execute
+							_, err := conns.Do("EXEC")
+							logger.FailOnError(err, "Failed to Redis Receive")
+						}
 					}
+					classkey := JsonMessage.Setclasses(AppKey)
+					schemakey := JsonMessage.Setschema(ClassesName, AppKey)
 
-					classkey := setclasses(AppKey)
-					schemakey := setschema(ClassesName, AppKey)
-
+					conns.Send("MULTI")
 					conns.Send("SREM", classkey, ClassesName)
 					conns.Send("DEL", schemakey)
 					conns.Send("DEL", UserValue)
 
 				case "deleteFields":
 
-					schemakey := setschema(ClassesName, AppKey)
+					schemakey := JsonMessage.Setschema(ClassesName, AppKey)
 					for _, v := range m.Fields {
 						conns.Send("Hdel", schemakey, v)
 						conns.Send("Hdel", ObjectValue, v)
@@ -231,7 +195,7 @@ func main() {
 						colQuerier := bson.M{"_id": ObjectId}
 						change := bson.M{"$unset": map[string]string{v.(string): ""}}
 						err = c.Update(colQuerier, change)
-						failOnError(err, "Failed to mongodb update")
+						logger.FailOnError(err, "Failed to mongodb update")
 					}
 
 				case "update":
@@ -246,10 +210,10 @@ func main() {
 							if k == "createAt" {
 								delete(Obj, k)
 							} else {
-								conns.Send("hset", ObjectValue, k, FloatToString(vv))
+								conns.Send("hset", ObjectValue, k, JsonMessage.FloatToString(vv))
 							}
 						case int64:
-							conns.Send("hset", ObjectValue, k, IntToString(vv))
+							conns.Send("hset", ObjectValue, k, JsonMessage.IntToString(vv))
 						default:
 							conns.Send("hset", ObjectValue, k, vv)
 						}
@@ -260,18 +224,18 @@ func main() {
 					colQuerier := bson.M{"_id": ObjectId}
 					change := bson.M{"$set": Obj}
 					err = c.Update(colQuerier, change)
-					failOnError(err, "Failed to mongodb update")
+					logger.FailOnError(err, "Failed to mongodb update")
 				default:
 					var err error
 					fmt.Println(m.Method)
-					failOnError(err, "Failed to m.Method is null")
+					logger.FailOnError(err, "Failed to m.Method is null")
 					continue
 				}
 
 				{
 					//Redis Pipelining execute
 					_, err := conns.Do("EXEC")
-					failOnError(err, "Failed to Redis Receive")
+					logger.FailOnError(err, "Failed to Redis Receive")
 				}
 				//Close releases the resources used by the Redis connection pool.
 				conns.Flush()
@@ -288,7 +252,7 @@ func main() {
 	}
 
 	<-forever
-	log.Printf("Worker is Dead.")
+	fmt.Printf("Worker is Dead.")
 
 	os.Exit(0)
 }
