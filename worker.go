@@ -38,7 +38,8 @@ func main() {
 	runtime.GOMAXPROCS(runtime.NumCPU())
 
 	//create logger
-	logger.CreateLogger("logfile" + string(os.Getpid()))
+	str := "logfile" + JsonMessage.IntToString(int64(os.Getpid()))
+	logger.CreateLogger(str)
 	defer logger.DropLogger()
 
 	//connect to RabbitMQ
@@ -199,37 +200,44 @@ func main() {
 					}
 
 				case "update":
-					//Redis Update
-					Obj := m.Entity.(map[string]interface{})
-					fmt.Println("update")
-					for k, v := range Obj {
-						switch vv := v.(type) {
-						case string:
-							conns.Send("hset", ObjectValue, k, vv)
-						case float64:
-							if k == "createAt" {
-								delete(Obj, k)
-							} else {
-								conns.Send("hset", ObjectValue, k, JsonMessage.FloatToString(vv))
-							}
-						case int64:
-							conns.Send("hset", ObjectValue, k, JsonMessage.IntToString(vv))
-						default:
-							conns.Send("hset", ObjectValue, k, vv)
-						}
-					}
-					conns.Send("zadd", UserValue, m.TimeStamp, ObjectId)
+					conns.Do("EXEC")
 
-					//MongoDB Update
-					colQuerier := bson.M{"_id": ObjectId}
-					change := bson.M{"$set": Obj}
-					err = c.Update(colQuerier, change)
-					logger.FailOnError(err, "Failed to mongodb update")
+					//ObjectValue라는 key가 있어야지 Update한다.
+					check, _ := redis.Int64(conns.Do("exists", ObjectValue))
+
+					if check == 1 {
+						conns.Send("MULTI")
+						//Redis Update
+						Obj := m.Entity.(map[string]interface{})
+						fmt.Println("update")
+						for k, v := range Obj {
+							switch vv := v.(type) {
+							case string:
+								conns.Send("hset", ObjectValue, k, vv)
+							case float64:
+								if k == "createAt" {
+									delete(Obj, k)
+								} else {
+									conns.Send("hset", ObjectValue, k, JsonMessage.FloatToString(vv))
+								}
+							case int64:
+								conns.Send("hset", ObjectValue, k, JsonMessage.IntToString(vv))
+							default:
+								conns.Send("hset", ObjectValue, k, vv)
+							}
+						}
+						conns.Send("zadd", UserValue, m.TimeStamp, ObjectId)
+
+						//MongoDB Update
+						colQuerier := bson.M{"_id": ObjectId}
+						change := bson.M{"$set": Obj}
+						err = c.Update(colQuerier, change)
+						logger.FailOnError(err, "Failed to mongodb update")
+					}
 				default:
 					var err error
 					fmt.Println(m.Method)
-					logger.FailOnError(err, "Failed to m.Method is null")
-					continue
+					logger.FailOnError(err, "Failed to m.Method is null"+m.Method)
 				}
 
 				{
