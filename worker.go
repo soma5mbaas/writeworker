@@ -67,7 +67,7 @@ func main() {
 	p := newPool("stage.haru.io:6400", "")
 	defer p.Close()
 
-	session, err := mgo.Dial("14.63.166.21:40000")
+	session, err := mgo.Dial("mongo.haru.io:40000")
 	session.SetMode(mgo.Strong, false)
 	if err != nil {
 		panic(err)
@@ -111,7 +111,7 @@ func main() {
 				CollectionName := JsonMessage.CollectionTable(ClassesName, AppKey)
 
 				//MongoDB set
-				c := session.DB("test2").C(CollectionName)
+				c := session.DB("haru").C(CollectionName)
 				conns.Send("MULTI")
 
 				switch m.Method {
